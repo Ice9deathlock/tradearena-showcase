@@ -1,0 +1,16 @@
+project_id = "dhsphbkzplhcsujgcutt"
+
+[functions.join-competition]
+verify_jwt = false
+
+[functions.place-order]
+verify_jwt = false
+
+[functions.close-position]
+verify_jwt = false
+
+[functions.price-engine]
+verify_jwt = false
+
+[functions.candles-engine]
+verify_jwt = false
