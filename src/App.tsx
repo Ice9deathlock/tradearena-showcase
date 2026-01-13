@@ -11,7 +11,6 @@ import Competitions from "./pages/Competitions";
 import CompetitionDetail from "./pages/CompetitionDetail";
 import MyCompetitionDashboard from "./pages/MyCompetitionDashboard";
 import Trading from "./pages/Trading";
-import TradingPlatform from "./pages/TradingPlatform";
 import Leaderboard from "./pages/Leaderboard";
 import Wallet from "./pages/Wallet";
 import Profile from "./pages/Profile";
@@ -39,11 +38,6 @@ const App = () => (
               </ProtectedRoute>
             } />
             <Route path="/trading" element={<Trading />} />
-            <Route path="/trading-platform" element={
-              <ProtectedRoute>
-                <TradingPlatform />
-              </ProtectedRoute>
-            } />
             <Route path="/leaderboard" element={<Leaderboard />} />
             <Route path="/wallet" element={
               <ProtectedRoute>
