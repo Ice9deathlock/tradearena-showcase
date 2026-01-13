@@ -1,223 +1,102 @@
 /**
- * TradingView Trading Terminal - Exact Replica
- * Full-screen professional trading interface modeled after trading-terminal.tradingview-widget.com
+ * Native TradingView Trading Platform with Supabase Backend
+ * Loads trading.html and connects to TradeArena backend
  */
 
-import { useState, useMemo, useEffect, useCallback } from "react";
-import { useSearchParams, useNavigate } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
-import TVChart from "@/components/trading/TVChart";
-import TopToolbar from "@/components/trading/terminal/TopToolbar";
-import LeftToolbar from "@/components/trading/terminal/LeftToolbar";
-import RightSidebar from "@/components/trading/terminal/RightSidebar";
-import BottomPanel from "@/components/trading/terminal/BottomPanel";
-import QuickTradeOverlay from "@/components/trading/terminal/QuickTradeOverlay";
-import { useCompetitionInstruments, useUserTradingAccounts, useLivePrices } from "@/hooks/useTrading";
-import { useTradingRealtime } from "@/hooks/useRealtimePrices";
-import { Button } from "@/components/ui/button";
-
-const TV_COLORS = {
-  bg: "#131722",
-  bgSecondary: "#1e222d",
-  bgTertiary: "#2a2e39",
-  border: "#363a45",
-  textPrimary: "#d1d4dc",
-  textSecondary: "#787b86",
-  blue: "#2962ff",
-  green: "#26a69a",
-  red: "#ef5350",
-};
+import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
 
 const Trading = () => {
   const { user } = useAuth();
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  
-  const [selectedSymbol, setSelectedSymbol] = useState(searchParams.get("symbol") || "EURUSD");
-  const [interval, setInterval] = useState("1h");
-  const [bottomPanelExpanded, setBottomPanelExpanded] = useState(true);
-  const [rightSidebarVisible, setRightSidebarVisible] = useState(true);
-  const [bottomPanelHeight, setBottomPanelHeight] = useState(200);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Get user's trading accounts and competition instruments
-  const { data: accounts, isLoading: accountsLoading } = useUserTradingAccounts();
-  const selectedAccount = accounts?.[0];
-  const { data: competitionInstruments } = useCompetitionInstruments(selectedAccount?.competition_id);
+  const symbol = searchParams.get('symbol') || 'EURUSD';
 
-  // Get available symbols from competition - grouped by asset class
-  const instrumentsByClass = useMemo(() => {
-    if (!competitionInstruments?.length) {
-      return {
-        forex: [{ symbol: 'EURUSD', name: 'Euro/US Dollar' }, { symbol: 'GBPUSD', name: 'British Pound/US Dollar' }],
-        crypto: [{ symbol: 'BTCUSD', name: 'Bitcoin/US Dollar' }],
-        commodities: [{ symbol: 'XAUUSD', name: 'Gold/US Dollar' }],
-        indices: [],
-        stocks: [],
-      };
+  useEffect(() => {
+    // Get the symbol parameter and load the native platform with it
+    const tradingUrl = `/trading_platform-master/trading.html${symbol ? `?symbol=${symbol}` : ''}`;
+    
+    // Create an iframe to load the native platform
+    const iframe = document.createElement('iframe');
+    iframe.src = tradingUrl;
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    iframe.style.border = 'none';
+    iframe.style.position = 'absolute';
+    iframe.style.top = '0';
+    iframe.style.left = '0';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.sandbox.add('allow-same-origin');
+    iframe.sandbox.add('allow-scripts');
+    iframe.sandbox.add('allow-forms');
+    iframe.sandbox.add('allow-popups');
+    iframe.sandbox.add('allow-popups-to-escape-sandbox');
+    iframe.sandbox.add('allow-presentation');
+
+    const container = document.getElementById('trading-container');
+    if (container) {
+      container.appendChild(iframe);
+      setIsLoading(false);
     }
-    const grouped: Record<string, { symbol: string; name: string; id: string }[]> = {
-      forex: [],
-      crypto: [],
-      commodities: [],
-      indices: [],
-      stocks: [],
+
+    return () => {
+      if (container && iframe.parentElement === container) {
+        container.removeChild(iframe);
+      }
     };
-    competitionInstruments.forEach(ci => {
-      if (ci.instrument) {
-        const cls = ci.instrument.asset_class || 'forex';
-        if (!grouped[cls]) grouped[cls] = [];
-        grouped[cls].push({
-          symbol: ci.instrument.symbol,
-          name: ci.instrument.name,
-          id: ci.instrument.id,
-        });
+  }, [symbol]);
+
+  // Backend connection for broker API
+  useEffect(() => {
+    if (!user) return;
+
+    // Initialize backend connection with user context
+    window.tradeArenaConfig = {
+      userId: user.id,
+      userEmail: user.email,
+      supabaseUrl: import.meta.env.VITE_SUPABASE_URL,
+      supabaseKey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+    };
+
+    // Make config available to iframe
+    window.addEventListener('message', (event) => {
+      if (event.data.type === 'REQUEST_CONFIG') {
+        event.source.postMessage({
+          type: 'PROVIDE_CONFIG',
+          config: window.tradeArenaConfig,
+        }, '*');
       }
     });
-    return grouped;
-  }, [competitionInstruments]);
-
-  const allSymbols = useMemo(() => {
-    return Object.values(instrumentsByClass).flat().map(i => i.symbol);
-  }, [instrumentsByClass]);
-
-  // Get instrument IDs for realtime subscription
-  const instrumentIds = useMemo(() => {
-    return competitionInstruments
-      ?.map(ci => ci.instrument?.id)
-      .filter(Boolean) as string[] || [];
-  }, [competitionInstruments]);
-
-  // Subscribe to realtime updates
-  useTradingRealtime(selectedAccount?.id, instrumentIds);
-
-  // Get live prices for watchlist
-  const { data: livePrices } = useLivePrices(allSymbols);
-
-  // Get selected instrument details
-  const selectedInstrument = useMemo(() => {
-    return competitionInstruments?.find(ci => ci.instrument?.symbol === selectedSymbol)?.instrument;
-  }, [competitionInstruments, selectedSymbol]);
-
-  // Update URL when symbol changes
-  useEffect(() => {
-    const newParams = new URLSearchParams(searchParams);
-    newParams.set("symbol", selectedSymbol);
-    navigate(`/trading?${newParams.toString()}`, { replace: true });
-  }, [selectedSymbol]);
-
-  const handleSymbolChange = useCallback((symbol: string) => {
-    setSelectedSymbol(symbol);
-  }, []);
-
-  // Not authenticated - show login prompt
-  if (!user) {
-    return (
-      <div className="h-screen w-screen flex items-center justify-center" style={{ backgroundColor: TV_COLORS.bg }}>
-        <div className="text-center max-w-md p-8">
-          <h2 className="text-2xl font-bold text-white mb-4">Trading Terminal</h2>
-          <p className="mb-6" style={{ color: TV_COLORS.textSecondary }}>
-            Sign in to access the full trading terminal with live market data and order execution.
-          </p>
-          <Button
-            onClick={() => navigate("/auth")}
-            className="text-white"
-            style={{ backgroundColor: TV_COLORS.blue }}
-          >
-            Sign In to Trade
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  // No competition account - show join prompt
-  if (!accountsLoading && !accounts?.length) {
-    return (
-      <div className="h-screen w-screen flex items-center justify-center" style={{ backgroundColor: TV_COLORS.bg }}>
-        <div className="text-center max-w-md p-8">
-          <h2 className="text-2xl font-bold text-white mb-4">No Active Competition</h2>
-          <p className="mb-6" style={{ color: TV_COLORS.textSecondary }}>
-            Join a competition to start trading with virtual funds.
-          </p>
-          <Button
-            onClick={() => navigate("/competitions")}
-            className="text-white"
-            style={{ backgroundColor: TV_COLORS.blue }}
-          >
-            Browse Competitions
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  }, [user]);
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ backgroundColor: TV_COLORS.bg }}>
-      {/* Top Toolbar */}
-      <TopToolbar
-        selectedSymbol={selectedSymbol}
-        selectedInstrument={selectedInstrument}
-        interval={interval}
-        onIntervalChange={setInterval}
-        onSymbolSearch={handleSymbolChange}
-        rightSidebarVisible={rightSidebarVisible}
-        onToggleRightSidebar={() => setRightSidebarVisible(!rightSidebarVisible)}
-      />
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Drawing Toolbar */}
-        <LeftToolbar />
-
-        {/* Chart Area with Overlaid Trade Buttons */}
-        <div className="flex-1 flex flex-col relative min-w-0">
-          {/* Chart */}
-          <div 
-            className="flex-1 min-h-0 relative"
-            style={{ 
-              height: bottomPanelExpanded 
-                ? `calc(100% - ${bottomPanelHeight}px)` 
-                : "calc(100% - 32px)" 
-            }}
-          >
-            <TVChart
-              symbol={selectedSymbol}
-              instrumentId={selectedInstrument?.id}
-              accountId={selectedAccount?.id}
-            />
-
-            {/* Quick Trade Overlay - Buy/Sell buttons on chart */}
-            <QuickTradeOverlay
-              symbol={selectedSymbol}
-              instrument={selectedInstrument}
-              account={selectedAccount}
-              livePrices={livePrices}
-            />
-          </div>
-
-          {/* Bottom Panel - Account Manager / Trade */}
-          <BottomPanel
-            isExpanded={bottomPanelExpanded}
-            onToggle={() => setBottomPanelExpanded(!bottomPanelExpanded)}
-            height={bottomPanelHeight}
-            selectedSymbol={selectedSymbol}
-            onSymbolChange={handleSymbolChange}
-            account={selectedAccount}
-            livePrices={livePrices}
-          />
+    <div
+      id="trading-container"
+      style={{
+        width: '100%',
+        height: '100vh',
+        overflow: 'hidden',
+        position: 'relative',
+        backgroundColor: '#131722',
+      }}
+    >
+      {isLoading && (
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          color: '#fff',
+          fontSize: '18px',
+          textAlign: 'center',
+          zIndex: 1000,
+        }}>
+          <div>Loading TradingView Platform...</div>
         </div>
-
-        {/* Right Sidebar - Watchlist, Symbol Info, News */}
-        {rightSidebarVisible && (
-          <RightSidebar
-            instrumentsByClass={instrumentsByClass}
-            selectedSymbol={selectedSymbol}
-            onSymbolChange={handleSymbolChange}
-            livePrices={livePrices}
-            selectedInstrument={selectedInstrument}
-          />
-        )}
-      </div>
+      )}
     </div>
   );
 };
