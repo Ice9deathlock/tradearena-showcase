@@ -3,7 +3,7 @@
  * Loads trading.html and connects to TradeArena backend
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -11,14 +11,63 @@ const Trading = () => {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const [isLoading, setIsLoading] = useState(true);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
-  const symbol = searchParams.get('symbol') || 'EURUSD';
+  const symbol = searchParams.get('symbol') || 'AAPL';
 
+  // Set up message handler FIRST (before iframe)
   useEffect(() => {
-    // Get the symbol parameter and load the native platform with it
-    const tradingUrl = `/trading_platform-master/trading.html${symbol ? `?symbol=${symbol}` : ''}`;
-    
-    // Create an iframe to load the native platform
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data.type === 'REQUEST_CONFIG') {
+        if (user) {
+          const config = {
+            userId: user.id,
+            userEmail: user.email,
+            supabaseUrl: import.meta.env.VITE_SUPABASE_URL,
+            supabaseKey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          };
+          console.log('[Trading] Sending config to iframe:', {
+            userId: config.userId,
+            hasKey: !!config.supabaseKey,
+            url: config.supabaseUrl
+          });
+          (event.source as Window)?.postMessage({
+            type: 'PROVIDE_CONFIG',
+            config: config,
+          }, '*');
+        } else {
+          console.log('[Trading] Config requested but user not loaded yet');
+        }
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    console.log('[Trading] Message handler ready');
+
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
+  }, [user]);
+
+  // Create iframe after user is loaded
+  useEffect(() => {
+    if (!user) {
+      console.log('[Trading] Waiting for user...');
+      return;
+    }
+
+    console.log('[Trading] User loaded, creating iframe for:', user.id);
+
+    // Store config globally as backup
+    window.tradeArenaConfig = {
+      userId: user.id,
+      userEmail: user.email,
+      supabaseUrl: import.meta.env.VITE_SUPABASE_URL,
+      supabaseKey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    };
+
+    const tradingUrl = `/trading_platform-master/trading.html?symbol=${symbol}`;
+
     const iframe = document.createElement('iframe');
     iframe.src = tradingUrl;
     iframe.style.width = '100%';
@@ -36,10 +85,13 @@ const Trading = () => {
     iframe.sandbox.add('allow-popups-to-escape-sandbox');
     iframe.sandbox.add('allow-presentation');
 
+    iframeRef.current = iframe;
+
     const container = document.getElementById('trading-container');
     if (container) {
       container.appendChild(iframe);
       setIsLoading(false);
+      console.log('[Trading] Iframe created successfully');
     }
 
     return () => {
@@ -47,30 +99,7 @@ const Trading = () => {
         container.removeChild(iframe);
       }
     };
-  }, [symbol]);
-
-  // Backend connection for broker API
-  useEffect(() => {
-    if (!user) return;
-
-    // Initialize backend connection with user context
-    window.tradeArenaConfig = {
-      userId: user.id,
-      userEmail: user.email,
-      supabaseUrl: import.meta.env.VITE_SUPABASE_URL,
-      supabaseKey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-    };
-
-    // Make config available to iframe
-    window.addEventListener('message', (event) => {
-      if (event.data.type === 'REQUEST_CONFIG') {
-        event.source.postMessage({
-          type: 'PROVIDE_CONFIG',
-          config: window.tradeArenaConfig,
-        }, '*');
-      }
-    });
-  }, [user]);
+  }, [user, symbol]);
 
   return (
     <div
@@ -94,7 +123,7 @@ const Trading = () => {
           textAlign: 'center',
           zIndex: 1000,
         }}>
-          <div>Loading TradingView Platform...</div>
+          <div>{user ? 'Loading TradingView Platform...' : 'Loading user session...'}</div>
         </div>
       )}
     </div>

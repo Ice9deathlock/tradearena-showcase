@@ -1,22 +1,47 @@
 /**
  * Custom TradingView Datafeed
- * Single source of truth: price-engine (Twelve Data) and market_candles table
+ * Single source of truth: price-engine (Twelve Data), market_candles table, and Finage API for stocks
  */
 
 import { supabase } from "@/integrations/supabase/client";
+import { getStockQuote, getStockBars } from "@/integrations/finageApi";
 
 // Symbol configuration
 const SYMBOL_CONFIG: Record<string, { name: string; pricescale: number; type: string }> = {
+  // Forex pairs
   'EURUSD': { name: 'EUR/USD', pricescale: 100000, type: 'forex' },
   'GBPUSD': { name: 'GBP/USD', pricescale: 100000, type: 'forex' },
   'USDJPY': { name: 'USD/JPY', pricescale: 1000, type: 'forex' },
   'USDCHF': { name: 'USD/CHF', pricescale: 100000, type: 'forex' },
   'AUDUSD': { name: 'AUD/USD', pricescale: 100000, type: 'forex' },
   'USDCAD': { name: 'USD/CAD', pricescale: 100000, type: 'forex' },
+  // Crypto
   'BTCUSD': { name: 'BTC/USD', pricescale: 100, type: 'crypto' },
   'ETHUSD': { name: 'ETH/USD', pricescale: 100, type: 'crypto' },
+  // Commodities
   'XAUUSD': { name: 'XAU/USD', pricescale: 100, type: 'commodity' },
   'XAGUSD': { name: 'XAG/USD', pricescale: 1000, type: 'commodity' },
+  // US Stocks (Finage API)
+  'AAPL': { name: 'Apple Inc.', pricescale: 100, type: 'stock' },
+  'MSFT': { name: 'Microsoft Corp.', pricescale: 100, type: 'stock' },
+  'GOOGL': { name: 'Alphabet Inc.', pricescale: 100, type: 'stock' },
+  'AMZN': { name: 'Amazon.com Inc.', pricescale: 100, type: 'stock' },
+  'NVDA': { name: 'NVIDIA Corp.', pricescale: 100, type: 'stock' },
+  'META': { name: 'Meta Platforms Inc.', pricescale: 100, type: 'stock' },
+  'TSLA': { name: 'Tesla Inc.', pricescale: 100, type: 'stock' },
+  'JPM': { name: 'JPMorgan Chase & Co.', pricescale: 100, type: 'stock' },
+  'V': { name: 'Visa Inc.', pricescale: 100, type: 'stock' },
+  'WMT': { name: 'Walmart Inc.', pricescale: 100, type: 'stock' },
+  'JNJ': { name: 'Johnson & Johnson', pricescale: 100, type: 'stock' },
+  'UNH': { name: 'UnitedHealth Group', pricescale: 100, type: 'stock' },
+  'BAC': { name: 'Bank of America', pricescale: 100, type: 'stock' },
+  'PG': { name: 'Procter & Gamble', pricescale: 100, type: 'stock' },
+  'HD': { name: 'Home Depot Inc.', pricescale: 100, type: 'stock' },
+  'MA': { name: 'Mastercard Inc.', pricescale: 100, type: 'stock' },
+  'DIS': { name: 'Walt Disney Co.', pricescale: 100, type: 'stock' },
+  'NFLX': { name: 'Netflix Inc.', pricescale: 100, type: 'stock' },
+  'ADBE': { name: 'Adobe Inc.', pricescale: 100, type: 'stock' },
+  'CRM': { name: 'Salesforce Inc.', pricescale: 100, type: 'stock' },
 };
 
 // Resolution mapping
@@ -97,12 +122,14 @@ export function createDatafeed(instrumentIdMap: Record<string, string> = {}) {
           supported_resolutions: ['1', '5', '15', '30', '60', '240', 'D', 'W'],
           exchanges: [
             { value: '', name: 'All Exchanges', desc: '' },
+            { value: 'STOCK', name: 'US Stocks', desc: 'US Stock Market' },
             { value: 'FOREX', name: 'Forex', desc: 'Foreign Exchange' },
             { value: 'CRYPTO', name: 'Crypto', desc: 'Cryptocurrency' },
             { value: 'COMMODITY', name: 'Commodity', desc: 'Commodities' },
           ],
           symbols_types: [
             { name: 'All types', value: '' },
+            { name: 'Stocks', value: 'stock' },
             { name: 'Forex', value: 'forex' },
             { name: 'Crypto', value: 'crypto' },
             { name: 'Commodity', value: 'commodity' },
@@ -180,71 +207,86 @@ export function createDatafeed(instrumentIdMap: Record<string, string> = {}) {
       onErrorCallback: (reason: string) => void
     ) => {
       const symbol = symbolInfo.name;
+      const symbolType = symbolInfo.type;
       const timeframe = RESOLUTION_MAP[resolution] || '1h';
-      
+
       console.log('[Datafeed] getBars:', symbol, resolution, periodParams);
 
       try {
-        const instrumentId = await getInstrumentId(symbol);
-        
-        if (!instrumentId) {
-          console.warn(`[Datafeed] No instrument ID for ${symbol}, fetching from candles-engine`);
-        }
-
-        // Try to get from market_candles table first
         let bars: Bar[] = [];
-        
-        if (instrumentId) {
-          const { data: candles, error } = await supabase
-            .from('market_candles')
-            .select('*')
-            .eq('instrument_id', instrumentId)
-            .eq('timeframe', timeframe)
-            .gte('ts_open', new Date(periodParams.from * 1000).toISOString())
-            .lte('ts_open', new Date(periodParams.to * 1000).toISOString())
-            .order('ts_open', { ascending: true })
-            .limit(1000);
 
-          if (!error && candles && candles.length > 0) {
-            bars = candles.map(c => ({
-              time: new Date(c.ts_open).getTime(),
-              open: c.open,
-              high: c.high,
-              low: c.low,
-              close: c.close,
-              volume: c.volume || 0,
-            }));
-            console.log(`[Datafeed] Got ${bars.length} bars from market_candles`);
-          }
-        }
+        // Use Finage API for stocks
+        if (symbolType === 'stock') {
+          console.log('[Datafeed] Fetching stock data from Finage API...');
+          const stockBars = await getStockBars(symbol, resolution, periodParams.from, periodParams.to);
 
-        // If no candles in DB, fetch from candles-engine
-        if (bars.length === 0) {
-          console.log('[Datafeed] Fetching from candles-engine...');
-          
-          const { data, error } = await supabase.functions.invoke('candles-engine', {
-            body: {
-              symbol,
-              interval: timeframe,
-              start_date: new Date(periodParams.from * 1000).toISOString().split('T')[0],
-              end_date: new Date(periodParams.to * 1000).toISOString().split('T')[0],
-            },
-          });
-
-          if (error) {
-            console.error('[Datafeed] candles-engine error:', error);
-            // Fall back to generated data
+          if (stockBars.length > 0) {
+            bars = stockBars;
+            console.log(`[Datafeed] Got ${bars.length} bars from Finage API`);
+          } else {
+            // Fall back to generated data for stocks
             bars = generateMockBars(symbol, resolution, periodParams.from, periodParams.to);
-          } else if (data?.candles) {
-            bars = data.candles.map((c: any) => ({
-              time: new Date(c.datetime || c.ts_open).getTime(),
-              open: parseFloat(c.open),
-              high: parseFloat(c.high),
-              low: parseFloat(c.low),
-              close: parseFloat(c.close),
-              volume: parseFloat(c.volume || 0),
-            }));
-            console.log(`[Datafeed] Got ${bars.length} bars from candles-engine`);
+          }
+        } else {
+          // For forex, crypto, commodities - use existing logic
+          const instrumentId = await getInstrumentId(symbol);
+
+          if (!instrumentId) {
+            console.warn(`[Datafeed] No instrument ID for ${symbol}, fetching from candles-engine`);
+          }
+
+          // Try to get from market_candles table first
+          if (instrumentId) {
+            const { data: candles, error } = await supabase
+              .from('market_candles')
+              .select('*')
+              .eq('instrument_id', instrumentId)
+              .eq('timeframe', timeframe)
+              .gte('ts_open', new Date(periodParams.from * 1000).toISOString())
+              .lte('ts_open', new Date(periodParams.to * 1000).toISOString())
+              .order('ts_open', { ascending: true })
+              .limit(1000);
+
+            if (!error && candles && candles.length > 0) {
+              bars = candles.map(c => ({
+                time: new Date(c.ts_open).getTime(),
+                open: c.open,
+                high: c.high,
+                low: c.low,
+                close: c.close,
+                volume: c.volume || 0,
+              }));
+              console.log(`[Datafeed] Got ${bars.length} bars from market_candles`);
+            }
+          }
+
+          // If no candles in DB, fetch from candles-engine
+          if (bars.length === 0) {
+            console.log('[Datafeed] Fetching from candles-engine...');
+
+            const { data, error } = await supabase.functions.invoke('candles-engine', {
+              body: {
+                symbol,
+                interval: timeframe,
+                start_date: new Date(periodParams.from * 1000).toISOString().split('T')[0],
+                end_date: new Date(periodParams.to * 1000).toISOString().split('T')[0],
+              },
+            });
+
+            if (error) {
+              console.error('[Datafeed] candles-engine error:', error);
+              bars = generateMockBars(symbol, resolution, periodParams.from, periodParams.to);
+            } else if (data?.candles) {
+              bars = data.candles.map((c: any) => ({
+                time: new Date(c.datetime || c.ts_open).getTime(),
+                open: parseFloat(c.open),
+                high: parseFloat(c.high),
+                low: parseFloat(c.low),
+                close: parseFloat(c.close),
+                volume: parseFloat(c.volume || 0),
+              }));
+              console.log(`[Datafeed] Got ${bars.length} bars from candles-engine`);
+            }
           }
         }
 
@@ -264,13 +306,12 @@ export function createDatafeed(instrumentIdMap: Record<string, string> = {}) {
       resolution: string,
       onRealtimeCallback: (bar: Bar) => void,
       subscriberUID: string,
-      onResetCacheNeededCallback: () => void
+      _onResetCacheNeededCallback: () => void
     ) => {
       const symbol = symbolInfo.name;
+      const symbolType = symbolInfo.type;
       console.log('[Datafeed] subscribeBars:', symbol, subscriberUID);
 
-      const instrumentId = await getInstrumentId(symbol);
-      
       const subscription: Subscription = {
         symbolInfo,
         resolution,
@@ -278,60 +319,106 @@ export function createDatafeed(instrumentIdMap: Record<string, string> = {}) {
         callback: onRealtimeCallback,
       };
 
-      // Subscribe to market_prices_latest for realtime updates
-      if (instrumentId) {
-        const channel = supabase
-          .channel(`prices_${subscriberUID}`)
-          .on(
-            'postgres_changes',
-            {
-              event: '*',
-              schema: 'public',
-              table: 'market_prices_latest',
-              filter: `instrument_id=eq.${instrumentId}`,
-            },
-            (payload: any) => {
-              const newPrice = payload.new;
-              if (!newPrice) return;
+      // For stocks, use Finage API polling
+      if (symbolType === 'stock') {
+        const pollInterval = setInterval(async () => {
+          try {
+            const quote = await getStockQuote(symbol);
+            if (!quote) return;
 
-              const resolutionSeconds = RESOLUTION_SECONDS[resolution] || 60;
-              const currentTime = Math.floor(Date.now() / 1000);
-              const barTime = Math.floor(currentTime / resolutionSeconds) * resolutionSeconds * 1000;
+            const resolutionSeconds = RESOLUTION_SECONDS[resolution] || 60;
+            const currentTime = Math.floor(Date.now() / 1000);
+            const barTime = Math.floor(currentTime / resolutionSeconds) * resolutionSeconds * 1000;
 
-              const sub = subscriptions.get(subscriberUID);
-              if (!sub) return;
+            const sub = subscriptions.get(subscriberUID);
+            if (!sub) return;
 
-              const price = newPrice.price;
+            const price = quote.price;
 
-              if (sub.lastBar && sub.lastBar.time === barTime) {
-                // Update existing bar
-                const updatedBar: Bar = {
-                  ...sub.lastBar,
-                  high: Math.max(sub.lastBar.high, price),
-                  low: Math.min(sub.lastBar.low, price),
-                  close: price,
-                };
-                sub.lastBar = updatedBar;
-                sub.callback(updatedBar);
-              } else {
-                // New bar
-                const newBar: Bar = {
-                  time: barTime,
-                  open: price,
-                  high: price,
-                  low: price,
-                  close: price,
-                };
-                sub.lastBar = newBar;
-                sub.callback(newBar);
-              }
+            if (sub.lastBar && sub.lastBar.time === barTime) {
+              const updatedBar: Bar = {
+                ...sub.lastBar,
+                high: Math.max(sub.lastBar.high, price),
+                low: Math.min(sub.lastBar.low, price),
+                close: price,
+              };
+              sub.lastBar = updatedBar;
+              sub.callback(updatedBar);
+            } else {
+              const newBar: Bar = {
+                time: barTime,
+                open: price,
+                high: price,
+                low: price,
+                close: price,
+              };
+              sub.lastBar = newBar;
+              sub.callback(newBar);
             }
-          )
-          .subscribe();
+          } catch (err) {
+            console.error('[Datafeed] Stock quote polling error:', err);
+          }
+        }, 5000); // Poll every 5 seconds
 
         subscription.channelUnsubscribe = () => {
-          supabase.removeChannel(channel);
+          clearInterval(pollInterval);
         };
+      } else {
+        // For forex, crypto, commodities - use Supabase realtime
+        const instrumentId = await getInstrumentId(symbol);
+
+        if (instrumentId) {
+          const channel = supabase
+            .channel(`prices_${subscriberUID}`)
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table: 'market_prices_latest',
+                filter: `instrument_id=eq.${instrumentId}`,
+              },
+              (payload: any) => {
+                const newPrice = payload.new;
+                if (!newPrice) return;
+
+                const resolutionSeconds = RESOLUTION_SECONDS[resolution] || 60;
+                const currentTime = Math.floor(Date.now() / 1000);
+                const barTime = Math.floor(currentTime / resolutionSeconds) * resolutionSeconds * 1000;
+
+                const sub = subscriptions.get(subscriberUID);
+                if (!sub) return;
+
+                const price = newPrice.price;
+
+                if (sub.lastBar && sub.lastBar.time === barTime) {
+                  const updatedBar: Bar = {
+                    ...sub.lastBar,
+                    high: Math.max(sub.lastBar.high, price),
+                    low: Math.min(sub.lastBar.low, price),
+                    close: price,
+                  };
+                  sub.lastBar = updatedBar;
+                  sub.callback(updatedBar);
+                } else {
+                  const newBar: Bar = {
+                    time: barTime,
+                    open: price,
+                    high: price,
+                    low: price,
+                    close: price,
+                  };
+                  sub.lastBar = newBar;
+                  sub.callback(newBar);
+                }
+              }
+            )
+            .subscribe();
+
+          subscription.channelUnsubscribe = () => {
+            supabase.removeChannel(channel);
+          };
+        }
       }
 
       subscriptions.set(subscriberUID, subscription);
@@ -374,18 +461,45 @@ export function createDatafeed(instrumentIdMap: Record<string, string> = {}) {
 function generateMockBars(symbol: string, resolution: string, from: number, to: number): Bar[] {
   const bars: Bar[] = [];
   const interval = RESOLUTION_SECONDS[resolution] || 3600;
-  
+
   // Base prices for different symbols
   const basePrices: Record<string, number> = {
+    // Forex
     'EURUSD': 1.08,
     'GBPUSD': 1.27,
     'USDJPY': 149.5,
+    'USDCHF': 0.88,
+    'AUDUSD': 0.65,
+    'USDCAD': 1.36,
+    // Crypto
     'BTCUSD': 42000,
     'ETHUSD': 2200,
+    // Commodities
     'XAUUSD': 2020,
     'XAGUSD': 23.5,
+    // US Stocks
+    'AAPL': 185,
+    'MSFT': 378,
+    'GOOGL': 142,
+    'AMZN': 155,
+    'NVDA': 495,
+    'META': 360,
+    'TSLA': 248,
+    'JPM': 172,
+    'V': 275,
+    'WMT': 165,
+    'JNJ': 156,
+    'UNH': 527,
+    'BAC': 34,
+    'PG': 158,
+    'HD': 345,
+    'MA': 428,
+    'DIS': 112,
+    'NFLX': 485,
+    'ADBE': 575,
+    'CRM': 265,
   };
-  
+
   let price = basePrices[symbol] || 100;
   const volatility = price * 0.001;
 
@@ -402,7 +516,7 @@ function generateMockBars(symbol: string, resolution: string, from: number, to: 
       high,
       low,
       close,
-      volume: Math.random() * 1000,
+      volume: Math.random() * 1000000,
     });
 
     price = close;

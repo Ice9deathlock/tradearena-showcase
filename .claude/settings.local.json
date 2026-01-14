@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__ide__getDiagnostics",
+      "WebFetch(domain:finage.co.uk)",
+      "Bash(npm run dev:*)",
+      "Bash(timeout:*)",
+      "WebFetch(domain:api.finage.co.uk)",
+      "Bash(ping:*)",
+      "Bash(curl:*)",
+      "Bash(docker:*)",
+      "Bash(docker info:*)",
+      "Bash(npx supabase start)",
+      "Bash(npx supabase:*)",
+      "Bash(npm install:*)",
+      "Bash(node setup-database.js:*)",
+      "Bash(move:*)",
+      "WebFetch(domain:tevkmkadkgwgdutbjztu.supabase.co)",
+      "Bash(node setup-database.cjs:*)",
+      "Bash(nslookup:*)",
+      "WebFetch(domain:supabase.com)",
+      "Bash(node -e \"\nconst { Client } = require\\(''pg''\\);\nconst client = new Client\\({\n  host: ''aws-0-ap-southeast-1.pooler.supabase.com'',\n  port: 5432,\n  database: ''postgres'',\n  user: ''postgres.tevkmkadkgwgdutbjztu'',\n  password: ''Q95MkFtjCGi5BmRe'',\n  ssl: { rejectUnauthorized: false }\n}\\);\nclient.connect\\(\\)\n  .then\\(\\(\\) => { console.log\\(''Connected!''\\); return client.query\\(''SELECT 1''\\); }\\)\n  .then\\(\\(\\) => { console.log\\(''Query OK''\\); client.end\\(\\); }\\)\n  .catch\\(e => { console.error\\(''Error:'', e.message\\); client.end\\(\\); }\\);\n\")",
+      "Bash(node -e \"\nconst { Client } = require\\(''pg''\\);\nconst dns = require\\(''dns''\\);\ndns.setDefaultResultOrder\\(''ipv4first''\\);\n\nconst client = new Client\\({\n  host: ''db.tevkmkadkgwgdutbjztu.supabase.co'',\n  port: 5432,\n  database: ''postgres'',\n  user: ''postgres'',\n  password: ''Q95MkFtjCGi5BmRe'',\n  ssl: { rejectUnauthorized: false }\n}\\);\nclient.connect\\(\\)\n  .then\\(\\(\\) => { console.log\\(''Connected!''\\); return client.query\\(''SELECT 1''\\); }\\)\n  .then\\(\\(\\) => { console.log\\(''Query OK''\\); client.end\\(\\); }\\)\n  .catch\\(e => { console.error\\(''Error:'', e.message\\); client.end\\(\\); }\\);\n\")",
+      "Bash(node -e:*)",
+      "Bash(node test-supabase.cjs:*)",
+      "Bash(set:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_389281f128510a9a4a71c8faac07b0be1445493a npx supabase link:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_389281f128510a9a4a71c8faac07b0be1445493a npx supabase functions deploy:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_389281f128510a9a4a71c8faac07b0be1445493a npx supabase functions logs:*)",
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)",
+      "Bash(node --check:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

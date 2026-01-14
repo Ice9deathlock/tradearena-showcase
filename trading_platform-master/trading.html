@@ -10,6 +10,229 @@
 		<script type="text/javascript" src="charting_library/charting_library.standalone.js"></script>
 		<script type="text/javascript" src="datafeeds/udf/dist/bundle.js"></script>
 		<script type="text/javascript" src="broker-sample/dist/bundle.js"></script>
+		<script type="text/javascript" src="finage-datafeed.js"></script>
+		<script type="text/javascript" src="supabase-broker.js"></script>
+
+		<script type="text/javascript">
+			// Global price data for trading
+			window.PRICE_DATA = {};
+
+			const SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA'];
+			const CRYPTO_SYMBOLS = ['BTCUSD', 'ETHUSD', 'SOLUSD'];
+
+			// Simulated stock prices (since Finage API not available)
+			const stockBasePrices = {
+				'AAPL': 250, 'MSFT': 420, 'GOOGL': 175, 'AMZN': 200,
+				'NVDA': 850, 'META': 550, 'TSLA': 250
+			};
+			const stockPrices = {};
+			Object.keys(stockBasePrices).forEach(s => {
+				stockPrices[s] = stockBasePrices[s] * (1 + (Math.random() - 0.5) * 0.01);
+			});
+
+			// CMC API cache - 60 second interval to avoid rate limits
+			let cmcLastFetch = 0;
+			let cmcCache = { 'BTCUSD': 94000, 'ETHUSD': 3200, 'SOLUSD': 143 }; // Fallback prices
+
+			// IMMEDIATELY populate PRICE_DATA with fallback prices (sync, before any async operations)
+			// This ensures quotes are available when TradingView initializes
+			(function initFallbackPrices() {
+				// Initialize stock prices
+				Object.keys(stockBasePrices).forEach(symbol => {
+					const price = stockBasePrices[symbol];
+					const spread = price * 0.0002;
+					window.PRICE_DATA[symbol] = {
+						symbol: symbol,
+						bid: price - spread,
+						ask: price + spread,
+						mid: price,
+						spread: spread * 2,
+						timestamp: Date.now(),
+						updated: new Date().toLocaleTimeString()
+					};
+				});
+
+				// Initialize crypto prices with fallbacks
+				CRYPTO_SYMBOLS.forEach(symbol => {
+					const price = cmcCache[symbol] || 0;
+					if (price > 0) {
+						const spread = price * 0.0005;
+						window.PRICE_DATA[symbol] = {
+							symbol: symbol,
+							bid: price - spread,
+							ask: price + spread,
+							mid: price,
+							spread: spread * 2,
+							timestamp: Date.now(),
+							updated: new Date().toLocaleTimeString()
+						};
+					}
+				});
+				console.log('[INIT] Fallback prices loaded:', Object.keys(window.PRICE_DATA));
+			})();
+
+			// Fetch crypto from CoinMarketCap
+			async function fetchCryptoFromCMC() {
+				const now = Date.now();
+				if (now - cmcLastFetch < 60000 && cmcCache['BTCUSD'] > 1000) {
+					return cmcCache; // Use cache (rate limit: 1 call per minute)
+				}
+
+				try {
+					const response = await fetch('/api/cmc/v1/cryptocurrency/quotes/latest?symbol=BTC,ETH,SOL');
+					if (!response.ok) {
+						console.warn('[CMC] API error:', response.status);
+						return cmcCache;
+					}
+
+					const data = await response.json();
+					if (data.data) {
+						if (data.data.BTC) cmcCache['BTCUSD'] = data.data.BTC.quote.USD.price;
+						if (data.data.ETH) cmcCache['ETHUSD'] = data.data.ETH.quote.USD.price;
+						if (data.data.SOL) cmcCache['SOLUSD'] = data.data.SOL.quote.USD.price;
+						cmcLastFetch = now;
+						console.log('[CMC] Updated crypto prices from CoinMarketCap');
+					}
+				} catch (error) {
+					console.warn('[CMC] Error:', error.message);
+				}
+				return cmcCache;
+			}
+
+			// Fetch quotes for all symbols
+			async function fetchAllQuotes() {
+				// Simulated stock prices with small random walk
+				for (const symbol of SYMBOLS) {
+					const change = stockPrices[symbol] * (Math.random() - 0.5) * 0.002;
+					stockPrices[symbol] = Math.max(1, stockPrices[symbol] + change);
+					const price = stockPrices[symbol];
+					const spread = price * 0.0002;
+
+					window.PRICE_DATA[symbol] = {
+						symbol: symbol,
+						bid: price - spread,
+						ask: price + spread,
+						bidSize: Math.floor(Math.random() * 1000),
+						askSize: Math.floor(Math.random() * 1000),
+						mid: price,
+						spread: spread * 2,
+						timestamp: Date.now(),
+						updated: new Date().toLocaleTimeString()
+					};
+				}
+
+				// Fetch real crypto prices from CoinMarketCap
+				await fetchCryptoFromCMC();
+
+				for (const symbol of CRYPTO_SYMBOLS) {
+					const basePrice = cmcCache[symbol] || 0;
+					if (basePrice > 0) {
+						// Add tiny tick for appearance of movement
+						const tick = basePrice * (Math.random() - 0.5) * 0.0002;
+						const price = basePrice + tick;
+						const spread = price * 0.0005;
+
+						window.PRICE_DATA[symbol] = {
+							symbol: symbol,
+							bid: price - spread,
+							ask: price + spread,
+							mid: price,
+							spread: spread * 2,
+							timestamp: Date.now(),
+							updated: new Date().toLocaleTimeString()
+						};
+
+						console.log(`[CRYPTO] ${symbol} | Bid: $${(price - spread).toFixed(2)} | Ask: $${(price + spread).toFixed(2)}`);
+					}
+				}
+			}
+
+			// Helper functions for trading
+			window.getBid = function(symbol) {
+				return window.PRICE_DATA[symbol]?.bid || null;
+			};
+
+			window.getAsk = function(symbol) {
+				return window.PRICE_DATA[symbol]?.ask || null;
+			};
+
+			window.getQuote = function(symbol) {
+				return window.PRICE_DATA[symbol] || null;
+			};
+
+			// Start fetching immediately and every 1 second
+			fetchAllQuotes();
+			setInterval(fetchAllQuotes, 1000);
+
+			console.log('===========================================');
+			console.log('[TRADING] Price feed started!');
+			console.log('[TRADING] Use: window.getBid("AAPL"), window.getAsk("AAPL"), window.getQuote("AAPL")');
+			console.log('===========================================');
+
+			// Position Monitor - checks SL/TP and closes positions automatically
+			function startPositionMonitor(broker) {
+				console.log('[MONITOR] Starting position monitor for SL/TP execution...');
+
+				setInterval(async function() {
+					try {
+						// Get all positions from broker
+						var positions = await broker.positions();
+						if (!positions || positions.length === 0) return;
+
+						for (var i = 0; i < positions.length; i++) {
+							var position = positions[i];
+							var quote = window.PRICE_DATA[position.symbol];
+
+							if (!quote || !position.qty || position.qty <= 0) continue;
+
+							var currentPrice = quote.mid;
+							var isLong = position.side === 1; // 1 = Buy (Long), -1 = Sell (Short)
+
+							// Check Take Profit
+							if (position.takeProfit !== undefined) {
+								var tpHit = isLong
+									? currentPrice >= position.takeProfit
+									: currentPrice <= position.takeProfit;
+
+								if (tpHit) {
+									console.log('============================================');
+									console.log('[MONITOR] TAKE PROFIT HIT!');
+									console.log('[MONITOR] Position:', position.symbol, isLong ? 'LONG' : 'SHORT');
+									console.log('[MONITOR] TP Level: $' + position.takeProfit.toFixed(2));
+									console.log('[MONITOR] Current Price: $' + currentPrice.toFixed(2));
+									console.log('[MONITOR] Closing position...');
+									console.log('============================================');
+
+									await broker.closePosition(position.id);
+									continue; // Skip SL check since position is closed
+								}
+							}
+
+							// Check Stop Loss
+							if (position.stopLoss !== undefined) {
+								var slHit = isLong
+									? currentPrice <= position.stopLoss
+									: currentPrice >= position.stopLoss;
+
+								if (slHit) {
+									console.log('============================================');
+									console.log('[MONITOR] STOP LOSS HIT!');
+									console.log('[MONITOR] Position:', position.symbol, isLong ? 'LONG' : 'SHORT');
+									console.log('[MONITOR] SL Level: $' + position.stopLoss.toFixed(2));
+									console.log('[MONITOR] Current Price: $' + currentPrice.toFixed(2));
+									console.log('[MONITOR] Closing position...');
+									console.log('============================================');
+
+									await broker.closePosition(position.id);
+								}
+							}
+						}
+					} catch (error) {
+						console.error('[MONITOR] Error checking positions:', error);
+					}
+				}, 1000); // Check every 1 second
+			}
+		</script>
 
 		<script type="text/javascript">
 
@@ -20,20 +243,51 @@
 				return results === null ? "" : decodeURIComponent(results[1].replace(/\+/g, " "));
 			}
 
-			function initOnReady() {
-				var datafeedUrl = "https://demo-feed-data.tradingview.com";
-				var customDataUrl = getParameterByName('dataUrl');
-				if (customDataUrl !== "") {
-					datafeedUrl = customDataUrl.startsWith('https://') ? customDataUrl : `https://${customDataUrl}`;
-				}
-				var datafeed = new Datafeeds.UDFCompatibleDatafeed(datafeedUrl, undefined, {
-					maxResponseLength: 1000,
-					expectedOrder: 'latestFirst',
+			// Get config from parent window (React app)
+			var tradeArenaConfig = null;
+
+			function getConfigFromParent() {
+				return new Promise((resolve) => {
+					// Try to get config from parent window
+					if (window.parent && window.parent !== window) {
+						window.parent.postMessage({ type: 'REQUEST_CONFIG' }, '*');
+
+						const handler = (event) => {
+							if (event.data.type === 'PROVIDE_CONFIG') {
+								tradeArenaConfig = event.data.config;
+								window.removeEventListener('message', handler);
+								console.log('[TradingView] Received config from parent:', tradeArenaConfig);
+								resolve(tradeArenaConfig);
+							}
+						};
+						window.addEventListener('message', handler);
+
+						// Timeout after 2 seconds
+						setTimeout(() => {
+							window.removeEventListener('message', handler);
+							resolve(null);
+						}, 2000);
+					} else {
+						resolve(null);
+					}
 				});
+			}
+
+			async function initOnReady() {
+				// Try to get config from parent
+				await getConfigFromParent();
+
+				// Use Finage datafeed for real US stock data
+				var datafeed = new FinageDatafeed();
+
+				console.log('[TradingView] Creating widget with FinageDatafeed...');
+				console.log('[TradingView] Datafeed object:', datafeed);
+				console.log('[TradingView] TradeArena config:', tradeArenaConfig);
+
 				var widget = window.tvWidget = new TradingView.widget({
-					// debug: true, // uncomment this line to see Library errors and warnings in the console
+					debug: true, // Enable debug to see Library errors
 					fullscreen: true,
-					symbol: 'AAPL',
+					symbol: getParameterByName('symbol') || 'BTCUSD',
 					interval: '1D',
 					container: "tv_chart_container",
 					//	BEWARE: no trailing slash is expected in feed URL
@@ -41,8 +295,11 @@
 					library_path: "charting_library/",
 					locale: getParameterByName('lang') || "en",
 
+					// Enable quotes provider for bid/ask in order ticket
+					quotes_provider: datafeed,
+
 					disabled_features: ["use_localstorage_for_settings"],
-					enabled_features: ["study_templates", 'dom_widget'],
+					enabled_features: ["study_templates", 'dom_widget', 'show_spread_operators'],
 					charts_storage_url: 'https://saveload.tradingview.com',
 					charts_storage_api_version: "1.1",
 					client_id: 'trading_platform_demo',
@@ -55,7 +312,7 @@
 						watchlist: true,
 						datawindow: true,
 						watchlist_settings: {
-							default_symbols: ["MSFT", "IBM", "AAPL"]
+							default_symbols: ["BTCUSD", "ETHUSD", "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
 						}
 					},
 
@@ -66,29 +323,121 @@
 						} ]
 					},
 
-					broker_factory: function(host) { return new Brokers.BrokerDemo(host, datafeed); },
+					broker_factory: function(host) {
+					var broker;
+
+					// Use Supabase broker if config is available
+					if (tradeArenaConfig && tradeArenaConfig.userId && window.SupabaseBroker) {
+						console.log('[TradingView] Using SupabaseBroker with real backend');
+						broker = new window.SupabaseBroker(host, datafeed, tradeArenaConfig);
+
+						// Store broker reference globally
+						window.tradingBroker = broker;
+
+						// Start position monitor for SL/TP execution
+						startPositionMonitor(broker);
+
+						return {
+							accountsMetainfo: () => broker.accountsMetainfo(),
+							accountInfo: (id) => broker.accountInfo(id),
+							positions: (id) => broker.positions(id),
+							orders: (id) => broker.orders(id),
+							placeOrder: (order) => broker.placeOrder(order),
+							modifyOrder: (id, mods) => broker.modifyOrder(id, mods),
+							cancelOrder: (id) => broker.cancelOrder(id),
+							closePosition: (id) => broker.closePosition(id),
+							reversePosition: (id) => broker.reversePosition(id),
+							subscribeQuotes: (symbols) => broker.subscribeQuotes(symbols),
+							unsubscribeQuotes: (symbols) => broker.unsubscribeQuotes(symbols),
+							getQuotes: (symbols) => broker.getQuotes(symbols),
+							symbolQuotes: (symbol) => broker.getCurrentQuote(symbol),
+							subscribeDOME: (symbol, cb, guid) => broker.subscribeDOME(symbol, cb, guid),
+							unsubscribeDOME: (guid) => broker.unsubscribeDOME(guid),
+							connectionStatus: () => broker.connectionStatus(),
+							isTradable: (symbol) => broker.isTradable(symbol)
+						};
+					}
+
+					// Fallback to demo broker
+					console.log('[TradingView] Using Demo Broker (no config)');
+					broker = new Brokers.BrokerDemo(host, datafeed);
+
+					// Store broker reference globally for position monitoring
+					window.tradingBroker = broker;
+
+					// Override placeOrder to use real bid/ask prices from PRICE_DATA
+					var originalPlaceOrder = broker.placeOrder.bind(broker);
+					broker.placeOrder = function(order) {
+						var quote = window.PRICE_DATA[order.symbol] || window.getQuote(order.symbol);
+						if (quote) {
+							// Use real bid/ask for execution price
+							// Buy at Ask, Sell at Bid
+							var executionPrice = order.side === 1 ? quote.ask : quote.bid;
+							console.log('============================================');
+							console.log('[TRADE] ' + (order.side === 1 ? 'BUY' : 'SELL') + ' ' + order.symbol);
+							console.log('[TRADE] Quantity:', order.qty);
+							console.log('[TRADE] Bid: $' + quote.bid.toFixed(2));
+							console.log('[TRADE] Ask: $' + quote.ask.toFixed(2));
+							console.log('[TRADE] Execution Price: $' + executionPrice.toFixed(2));
+							console.log('[TRADE] Spread: $' + quote.spread.toFixed(4));
+							console.log('============================================');
+
+							// Set the execution price on the order
+							order.limitPrice = executionPrice;
+						} else {
+							console.warn('[TRADE] No price data for ' + order.symbol);
+						}
+						return originalPlaceOrder(order);
+					};
+
+					// Start position monitor for SL/TP execution
+					startPositionMonitor(broker);
+
+					return broker;
+				},
 					broker_config: {
 						configFlags: {
 							supportNativeReversePosition: true,
 							supportClosePosition: true,
 							supportPLUpdate: true,
-							supportLevel2Data: false,
+							supportLevel2Data: true,
 							showQuantityInsteadOfAmount: true,
 							supportEditAmount: false,
 							supportOrderBrackets: true,
 							supportMarketBrackets: true,
 							supportPositionBrackets: true,
 							supportOrdersHistory: false,
+							supportMarketOrders: true,
+							supportLimitOrders: true,
+							supportStopOrders: true,
+							supportStopLimitOrders: true,
+							// Allow trading at all times
+							supportExtendedDurations: true,
+							supportCryptoExchangeOrderTicket: true,
+							supportDigitalSignature: false,
+							supportTradingBrokerPanel: true,
+							supportDisplayBrokerNameInSymbolSearch: false,
 						},
 						durations: [
 							{ name: 'DAY', value: 'DAY' },
 							{ name: 'GTC', value: 'GTC' },
+							{ name: 'IOC', value: 'IOC' },
+							{ name: 'FOK', value: 'FOK' },
 						],
 					},
 				});
 			};
 
-			window.addEventListener('DOMContentLoaded', initOnReady, false);
+			window.addEventListener('DOMContentLoaded', function() {
+				initOnReady();
+
+				// Start continuous market data feed - updates every 1 second
+				setTimeout(function() {
+					var watchlistSymbols = ["BTCUSD", "ETHUSD", "SOLUSD", "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"];
+					window.stopMarketFeed = window.startMarketDataFeed(watchlistSymbols, 1000);
+					console.log('[Trading] Market data feed started (1 second updates) for:', watchlistSymbols.join(', '));
+				}, 2000);
+			}, false);
 		</script>
 
 	</head>

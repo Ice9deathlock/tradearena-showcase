@@ -16,26 +16,33 @@ serve(async (req) => {
     // Validate auth
     const authHeader = req.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
-        status: 401, 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
-    const supabase = createClient(
+    // Admin client to bypass RLS
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    );
+
+    // User client for auth verification only
+    const supabaseUser = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_ANON_KEY')!,
       { global: { headers: { Authorization: authHeader } } }
     );
 
     // Get user from auth header
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    
+    const { data: { user }, error: userError } = await supabaseUser.auth.getUser();
+
     if (userError || !user) {
       console.error('Auth error:', userError);
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
-        status: 401, 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
@@ -44,16 +51,16 @@ serve(async (req) => {
 
     // Parse and validate request body
     const { competition_id } = await req.json();
-    
+
     if (!competition_id || typeof competition_id !== 'string') {
-      return new Response(JSON.stringify({ error: 'competition_id is required' }), { 
-        status: 400, 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      return new Response(JSON.stringify({ error: 'competition_id is required' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
     // Get competition details
-    const { data: competition, error: compError } = await supabase
+    const { data: competition, error: compError } = await supabaseAdmin
       .from('competitions')
       .select('id, name, status, starts_at, ends_at, entry_fee')
       .eq('id', competition_id)
@@ -61,24 +68,24 @@ serve(async (req) => {
 
     if (compError || !competition) {
       console.error('Competition not found:', compError);
-      return new Response(JSON.stringify({ error: 'Competition not found' }), { 
-        status: 404, 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      return new Response(JSON.stringify({ error: 'Competition not found' }), {
+        status: 404,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
     // Check if competition is joinable
     if (competition.status !== 'upcoming' && competition.status !== 'live') {
-      return new Response(JSON.stringify({ 
-        error: `Cannot join competition with status: ${competition.status}` 
-      }), { 
-        status: 400, 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      return new Response(JSON.stringify({
+        error: `Cannot join competition with status: ${competition.status}`
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
     // Check if already joined
-    const { data: existingParticipant } = await supabase
+    const { data: existingParticipant } = await supabaseAdmin
       .from('competition_participants')
       .select('id')
       .eq('competition_id', competition_id)
@@ -86,15 +93,15 @@ serve(async (req) => {
       .single();
 
     if (existingParticipant) {
-      return new Response(JSON.stringify({ error: 'Already joined this competition' }), { 
-        status: 400, 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      return new Response(JSON.stringify({ error: 'Already joined this competition' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
     // Get competition rules for starting balance
     console.log('Fetching rules for competition:', competition_id);
-    const { data: rules, error: rulesError } = await supabase
+    const { data: rules, error: rulesError } = await supabaseAdmin
       .from('competition_rules')
       .select('starting_balance')
       .eq('competition_id', competition_id)
@@ -104,9 +111,9 @@ serve(async (req) => {
 
     if (rulesError || !rules) {
       console.error('Rules not found:', rulesError);
-      return new Response(JSON.stringify({ error: 'Competition rules not found' }), { 
-        status: 404, 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      return new Response(JSON.stringify({ error: 'Competition rules not found' }), {
+        status: 404,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
@@ -114,7 +121,7 @@ serve(async (req) => {
 
     // Check wallet balance if entry fee > 0
     if (competition.entry_fee > 0) {
-      const { data: wallet, error: walletError } = await supabase
+      const { data: wallet, error: walletError } = await supabaseAdmin
         .from('wallet_accounts')
         .select('id, balance')
         .eq('user_id', userId)
@@ -122,37 +129,37 @@ serve(async (req) => {
 
       if (walletError || !wallet) {
         console.error('Wallet not found:', walletError);
-        return new Response(JSON.stringify({ error: 'Wallet not found' }), { 
-          status: 404, 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        return new Response(JSON.stringify({ error: 'Wallet not found' }), {
+          status: 404,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
 
       if (wallet.balance < competition.entry_fee) {
-        return new Response(JSON.stringify({ 
-          error: `Insufficient wallet balance. Required: $${competition.entry_fee}, Available: $${wallet.balance}` 
-        }), { 
-          status: 400, 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        return new Response(JSON.stringify({
+          error: `Insufficient wallet balance. Required: $${competition.entry_fee}, Available: $${wallet.balance}`
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
 
       // Deduct entry fee
-      const { error: deductError } = await supabase
+      const { error: deductError } = await supabaseAdmin
         .from('wallet_accounts')
         .update({ balance: wallet.balance - competition.entry_fee })
         .eq('id', wallet.id);
 
       if (deductError) {
         console.error('Failed to deduct entry fee:', deductError);
-        return new Response(JSON.stringify({ error: 'Failed to process entry fee' }), { 
-          status: 500, 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        return new Response(JSON.stringify({ error: 'Failed to process entry fee' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
 
       // Record wallet transaction
-      await supabase.from('wallet_transactions').insert({
+      await supabaseAdmin.from('wallet_transactions').insert({
         wallet_account_id: wallet.id,
         type: 'entry_fee',
         amount: -competition.entry_fee,
@@ -163,7 +170,7 @@ serve(async (req) => {
     }
 
     // Create participant
-    const { data: participant, error: participantError } = await supabase
+    const { data: participant, error: participantError } = await supabaseAdmin
       .from('competition_participants')
       .insert({
         competition_id,
@@ -175,14 +182,14 @@ serve(async (req) => {
 
     if (participantError || !participant) {
       console.error('Failed to create participant:', participantError);
-      return new Response(JSON.stringify({ error: 'Failed to join competition' }), { 
-        status: 500, 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      return new Response(JSON.stringify({ error: 'Failed to join competition' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
     // Create trading account
-    const { data: account, error: accountError } = await supabase
+    const { data: account, error: accountError } = await supabaseAdmin
       .from('accounts')
       .insert({
         participant_id: participant.id,
@@ -198,14 +205,14 @@ serve(async (req) => {
 
     if (accountError || !account) {
       console.error('Failed to create account:', accountError);
-      return new Response(JSON.stringify({ error: 'Failed to create trading account' }), { 
-        status: 500, 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      return new Response(JSON.stringify({ error: 'Failed to create trading account' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
     // Create initial equity snapshot
-    await supabase.from('equity_snapshots').insert({
+    await supabaseAdmin.from('equity_snapshots').insert({
       account_id: account.id,
       equity: startingBalance,
       balance: startingBalance,
